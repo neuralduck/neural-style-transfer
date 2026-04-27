@@ -1,15 +1,29 @@
 import os
 from tinygrad import Tensor, nn, TinyJit
-from tinygrad.nn.state import torch_load, load_state_dict, get_parameters, get_state_dict
+from tinygrad.nn.state import torch_load, load_state_dict, get_parameters
 from PIL import Image
 import numpy as np
 
-os.environ["DEV"]="CL"
-os.environ["DEBUG"]="4"
+import requests
 
-def download_model():
+def download_model(path=None):
     url = "https://download.pytorch.org/models/vgg19-dcbb9e9d.pth"
-    pass
+    filename = url.split("/")[-1]
+    if path is not None:
+        os.makedirs(path, exist_ok=True)
+        dest = os.path.join(path, filename)
+    else:
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        dest = os.path.join(script_dir, filename)
+    
+    resp = requests.get(url, stream=True)
+    resp.raise_for_status()
+    with open(dest, "wb") as f:
+        for chunk in resp.iter_content(chunk_size=8192):
+            if chunk:
+                f.write(chunk)
+    print(f"Model downloaded to: {dest}")
+    return dest
 
 class VGGFeatures:
     def __init__(self):
@@ -81,14 +95,20 @@ if __name__ == "__main__":
     CONTENT_PATH = "./img1.jpg"
     STYLE_PATH   = "./img2.jpg"
     OUT_PATH     = "./output.jpg"
-    SIZE         = 512
-    STEPS        = 500
+    SIZE         = 256
+    STEPS        = 150
     ALPHA        = 1.0
     BETA         = 1e5
-    LR           = 0.02
+    LR           = 0.03
 
     model = VGGFeatures()
-    load_state_dict(model, torch_load("./vgg19-dcbb9e9d.pth"), strict=False)
+    model_path = "./vgg19-dcbb9e9d.pth"
+
+    if not os.path.exists(model_path):
+        download_model()
+
+    load_state_dict(model, torch_load(model_path), strict=False)
+
 
     for p in get_parameters(model):
         p.requires_grad = False
@@ -101,9 +121,7 @@ if __name__ == "__main__":
     _, style_feats = model(style_img)
     style_targets = [gram(s) for s in style_feats]
     Tensor.no_grad = False
-
     gen = Tensor(content_img.numpy(), requires_grad=True)
-
     optimizer = nn.optim.Adam([gen], lr=LR)
     @TinyJit
     def step():
@@ -115,13 +133,12 @@ if __name__ == "__main__":
         loss   = ALPHA * c_loss + BETA * s_loss
         loss.backward()
         optimizer.step()
-        gen.realize()
-        return loss, c_loss, s_loss
+        return loss
 
     for _step in range(1, STEPS + 1):
-        loss, c_loss, s_loss = step()
+        loss= step()
         if _step % 50 == 0:
-            print(f"[{_step:4d}/{STEPS}] loss={loss.numpy():.4f}  content={c_loss.numpy():.4f}  style={s_loss.numpy():.4f}")
+            print(f"[{_step:4d}/{STEPS}] loss={loss.numpy()}")
 
     save_image(gen, OUT_PATH)
     print(f"saved: {OUT_PATH}")
